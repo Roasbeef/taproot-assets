@@ -359,3 +359,36 @@ ON CONFLICT(namespace)
 SELECT namespace, asset_id, group_key, proof_type, allow_sync_insert, allow_sync_export
 FROM federation_uni_sync_config
 ORDER BY group_key NULLS LAST, asset_id NULLS LAST, proof_type;
+
+-- name: UpsertMultiverseRoot :one
+INSERT INTO multiverse_roots (namespace_root, proof_type)
+VALUES (@namespace_root, @proof_type)
+ON CONFLICT (namespace_root)
+    -- This is a no-op to allow returning the ID.
+    DO UPDATE SET namespace_root = EXCLUDED.namespace_root
+RETURNING id;
+
+-- name: UpsertMultiverseLeaf :one
+INSERT INTO multiverse_leaves (
+    multiverse_root_id, asset_id, group_key, leaf_node_key, leaf_node_namespace
+) VALUES (
+    @multiverse_root_id, @asset_id, @group_key, @leaf_node_key,
+    @leaf_node_namespace
+)
+ON CONFLICT (leaf_node_key)
+    -- This is a no-op to allow returning the ID.
+    DO UPDATE SET leaf_node_key = EXCLUDED.leaf_node_key
+RETURNING id;
+
+-- name: DeleteMultiverseLeaf :exec
+DELETE FROM multiverse_leaves
+WHERE leaf_node_namespace = @namespace AND leaf_node_key = @leaf_node_key;
+
+-- name: QueryMultiverseLeaves :many
+SELECT r.namespace_root, r.proof_type, l.asset_id, l.group_key, l.leaf_node_key
+FROM multiverse_leaves l
+JOIN multiverse_roots r
+  ON l.multiverse_root_id = r.id
+WHERE r.proof_type = @proof_type AND
+      (l.asset_id = @asset_id OR @asset_id IS NULL) AND
+      (l.group_key = @group_key OR @group_key IS NULL);

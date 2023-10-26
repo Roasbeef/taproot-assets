@@ -126,6 +126,7 @@ func NewPostgresStore(cfg *PostgresConfig) (*PostgresStore, error) {
 			"INTEGER PRIMARY KEY": "SERIAL PRIMARY KEY",
 			"BIGINT PRIMARY KEY":  "BIGSERIAL PRIMARY KEY",
 			"TIMESTAMP":           "TIMESTAMP WITHOUT TIME ZONE",
+			"UNHEX":               "DECODE",
 		})
 
 		err = applyMigrations(

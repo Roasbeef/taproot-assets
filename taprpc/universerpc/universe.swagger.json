@@ -1862,6 +1862,15 @@
         }
       }
     },
+    "universerpcMultiverseRootResponse": {
+      "type": "object",
+      "properties": {
+        "multiverse_root": {
+          "$ref": "#/definitions/universerpcMerkleSumNode",
+          "description": "The root of the multiverse tree."
+        }
+      }
+    },
     "universerpcOutpoint": {
       "type": "object",
       "properties": {

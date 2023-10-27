@@ -11,17 +11,15 @@ import (
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
-	"github.com/lightninglabs/taproot-assets/internal/test"
-
 	tap "github.com/lightninglabs/taproot-assets"
 	"github.com/lightninglabs/taproot-assets/asset"
 	"github.com/lightninglabs/taproot-assets/fn"
+	"github.com/lightninglabs/taproot-assets/internal/test"
 	"github.com/lightninglabs/taproot-assets/mssmt"
 	"github.com/lightninglabs/taproot-assets/taprpc"
 	"github.com/lightninglabs/taproot-assets/taprpc/mintrpc"
 	unirpc "github.com/lightninglabs/taproot-assets/taprpc/universerpc"
 	"github.com/lightninglabs/taproot-assets/universe"
-
 	"github.com/lightningnetwork/lnd/lntest/wait"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/maps"
@@ -259,6 +257,35 @@ func testUniverseSync(t *harnessTest) {
 	require.NoError(t.t, err)
 	require.True(
 		t.t, AssertUniverseRootsEqual(universeRoots, universeRootsBob),
+	)
+
+	// Test the multiverse root is equal for both nodes.
+	multiverseRootAlice, err := t.tapd.MultiverseRoot(
+		ctxt, &unirpc.MultiverseRootRequest{
+			ProofType: unirpc.ProofType_PROOF_TYPE_ISSUANCE,
+		},
+	)
+	require.NoError(t.t, err)
+
+	// For Bob we query with the actual IDs of the universe we are aware of.
+	multiverseRootBob, err := bob.MultiverseRoot(
+		ctxt, &unirpc.MultiverseRootRequest{
+			ProofType:   unirpc.ProofType_PROOF_TYPE_ISSUANCE,
+			SpecificIds: uniIDs,
+		},
+	)
+	require.NoError(t.t, err)
+
+	require.Equal(
+		t.t, multiverseRootAlice.MultiverseRoot.RootHash,
+		multiverseRootBob.MultiverseRoot.RootHash,
+	)
+
+	// We also expect the proof's root hash to be equal to the actual
+	// multiverse root.
+	require.Equal(
+		t.t, firstAssetUniProof.MultiverseRoot.RootHash,
+		multiverseRootBob.MultiverseRoot.RootHash,
 	)
 }
 

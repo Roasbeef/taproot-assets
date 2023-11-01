@@ -177,6 +177,14 @@ type syncStatsCache = lru.Cache[syncStatsQuery, cachedSyncStats]
 // atomicAssetEventsCache is an atomic wrapper around the asset events cache.
 type atomicSyncStatsCache struct {
 	atomic.Pointer[syncStatsCache]
+
+	*cacheLogger
+}
+
+func newAtomicSyncStatsCache() atomicSyncStatsCache {
+	return atomicSyncStatsCache{
+		cacheLogger: newCacheLogger("sync stats"),
+	}
 }
 
 // wipe can be used to both wipe and init the stats cache.
@@ -216,13 +224,17 @@ func (a *atomicSyncStatsCache) fetchQuery(q universe.SyncStatsQuery,
 	// Now, we'll attempt to fetch the query from the cache.
 	statsCache := a.Load()
 	if statsCache == nil {
+		a.Miss()
 		return nil
 	}
 
 	cachedResult, err := statsCache.Get(query)
 	if err == nil {
+		a.Hit()
 		return cachedResult
 	}
+
+	a.Miss()
 
 	return nil
 }
@@ -241,12 +253,14 @@ type UniverseStats struct {
 
 	clock clock.Clock
 
-	statsMtx      sync.Mutex
-	statsSnapshot atomic.Pointer[universe.AggregateStats]
-	statsRefresh  *time.Timer
+	statsMtx         sync.Mutex
+	statsSnapshot    atomic.Pointer[universe.AggregateStats]
+	statsCacheLogger *cacheLogger
+	statsRefresh     *time.Timer
 
-	eventsMtx        sync.Mutex
-	assetEventsCache assetEventsCache
+	eventsMtx         sync.Mutex
+	assetEventsCache  assetEventsCache
+	eventsCacheLogger *cacheLogger
 
 	syncStatsMtx     sync.Mutex
 	syncStatsCache   atomicSyncStatsCache
@@ -289,17 +303,19 @@ func NewUniverseStats(db BatchedUniverseStats, clock clock.Clock,
 		o(&opts)
 	}
 
-	var atomicStatsCache atomicSyncStatsCache
+	atomicStatsCache := newAtomicSyncStatsCache()
 	atomicStatsCache.wipe()
 
 	return &UniverseStats{
-		db:    db,
-		clock: clock,
-		opts:  opts,
+		db:               db,
+		clock:            clock,
+		opts:             opts,
+		statsCacheLogger: newCacheLogger("total_universe_stats"),
 		assetEventsCache: lru.NewCache[eventQuery, cachedAssetEvents](
 			eventQueryCacheSize,
 		),
-		syncStatsCache: atomicStatsCache,
+		eventsCacheLogger: newCacheLogger("universe_asset_events"),
+		syncStatsCache:    atomicStatsCache,
 	}
 }
 
@@ -415,6 +431,7 @@ func (u *UniverseStats) AggregateSyncStats(
 
 	stats := u.statsSnapshot.Load()
 	if stats != nil {
+		u.statsCacheLogger.Hit()
 		return *stats, nil
 	}
 
@@ -425,8 +442,11 @@ func (u *UniverseStats) AggregateSyncStats(
 	// the mutex.
 	stats = u.statsSnapshot.Load()
 	if stats != nil {
+		u.statsCacheLogger.Hit()
 		return *stats, nil
 	}
+
+	u.statsCacheLogger.Miss()
 
 	var dbStats universe.AggregateStats
 
@@ -524,6 +544,7 @@ func (u *UniverseStats) QueryAssetStatsPerDay(ctx context.Context,
 	query := newEventQuery(q)
 	cachedResult, err := u.assetEventsCache.Get(query)
 	if err == nil {
+		u.eventsCacheLogger.Hit()
 		return cachedResult, nil
 	}
 
@@ -535,8 +556,11 @@ func (u *UniverseStats) QueryAssetStatsPerDay(ctx context.Context,
 	// mutex.
 	cachedResult, err = u.assetEventsCache.Get(query)
 	if err == nil {
+		u.eventsCacheLogger.Hit()
 		return cachedResult, nil
 	}
+
+	u.eventsCacheLogger.Miss()
 
 	var (
 		readTx  = NewUniverseStatsReadTx()

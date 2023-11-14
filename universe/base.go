@@ -139,65 +139,74 @@ func (a *Archive) RootNodes(ctx context.Context,
 // proof type. If the given list of universe IDs is non-empty, then the root
 // will be calculated just for those universes.
 func (a *Archive) MultiverseRoot(ctx context.Context, proofType ProofType,
-	filterByIDs []Identifier) (mssmt.Node, error) {
+	filterByIDs []Identifier) (fn.Option[MultiverseRoot], error) {
 
 	log.Debugf("Fetching multiverse root for proof type: %v", proofType)
 
-	leaveIDs, err := a.cfg.Multiverse.FetchMultiverseLeaves(
-		ctx, nil, nil, proofType,
+	none := fn.None[MultiverseRoot]()
+
+	// If we don't have any IDs, then we'll return the multiverse root for
+	// the given proof type.
+	if len(filterByIDs) == 0 {
+		rootNode, err := a.cfg.Multiverse.MultiverseRootNode(
+			ctx, proofType,
+		)
+		if err != nil {
+			return fn.None[MultiverseRoot](), err
+		}
+
+		return rootNode, nil
+	}
+
+	// Otherwise, we'll run the query to fetch the multiverse leaf for each
+	// of the specified assets.
+	uniTargets := make([]MultiverseLeafDesc, 0, len(filterByIDs))
+	for _, id := range filterByIDs {
+		var uniTarget MultiverseLeafDesc
+
+		if id.GroupKey != nil {
+			uniTarget = fn.NewRight[asset.ID](*id.GroupKey)
+		} else {
+			uniTarget = fn.NewLeft[asset.ID, btcec.PublicKey](
+				id.AssetID,
+			)
+		}
+
+		uniTargets = append(uniTargets, uniTarget)
+	}
+
+	multiverseLeaves, err := a.cfg.Multiverse.FetchMultiverseLeaves(
+		ctx, uniTargets, proofType,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("unable to fetch multiverse leaves: %w",
-			err)
+		return none, fmt.Errorf("unable to fetch multiverse "+
+			"leaves: %w", err)
 	}
 
-	// If a filter list is provided, then we'll only include the leaves
-	// that are in the filter list.
-	includeUniverse := func(id Identifier) bool {
-		if len(filterByIDs) == 0 {
-			return true
-		}
-
-		for _, filterID := range filterByIDs {
-			if id.Equals(filterID) {
-				return true
-			}
-		}
-
-		return false
-	}
-
+	// Now that we have the leaves, we'll insert them into an in-memory
+	// tree so we can obtain the root for this unique combination.
 	memStore := mssmt.NewDefaultStore()
 	tree := mssmt.NewCompactedTree(memStore)
 
-	for _, id := range leaveIDs {
-		// Only include the universe if it's in the filter list (given
-		// the filter list is non-empty).
-		if !includeUniverse(id) {
-			continue
-		}
-
-		uniRoot, err := a.cfg.Multiverse.UniverseRootNode(ctx, id)
+	for _, leaf := range multiverseLeaves {
+		_, err = tree.Insert(ctx, leaf.ID.Bytes(), leaf.LeafNode)
 		if err != nil {
-			return nil, fmt.Errorf("unable to fetch universe "+
-				"root: %w", err)
-		}
-
-		rootHash := uniRoot.NodeHash()
-		rootSum := uniRoot.NodeSum()
-
-		if id.ProofType == ProofTypeIssuance {
-			rootSum = 1
-		}
-
-		uniLeaf := mssmt.NewLeafNode(rootHash[:], rootSum)
-		_, err = tree.Insert(ctx, id.Bytes(), uniLeaf)
-		if err != nil {
-			return nil, fmt.Errorf("unable to insert leaf: %w", err)
+			return none, fmt.Errorf("unable to insert "+
+				"leaf: %w", err)
 		}
 	}
 
-	return tree.Root(ctx)
+	customRoot, err := tree.Root(ctx)
+	if err != nil {
+		return none, fmt.Errorf("unable to obtain root: %w", err)
+	}
+
+	multiverseRoot := MultiverseRoot{
+		ProofType: proofType,
+		Node:      customRoot,
+	}
+
+	return fn.Some(multiverseRoot), nil
 }
 
 // UpsertProofLeaf attempts to upsert a proof for an asset issuance or transfer

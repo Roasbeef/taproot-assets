@@ -1,89 +1,82 @@
 package rfq
 
 import (
-	"fmt"
-	"math"
-	"math/big"
-
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/lightningnetwork/lnd/lnwire"
-	"golang.org/x/exp/constraints"
 )
 
-// FixedPoint is used to represent fixed point arithmetic for currency related
-// calculations. A fixed point consists of a value, and a scale. The value is
-// the integer representation of the number. The scale is used to represent the
-// fractional/decimal component.
-type FixedPoint[T constraints.Unsigned] struct {
-	// Value is the value of the FixedPoint integer.
-	Value T
-
-	// Scale is used to represent the fractional component. This always
-	// represents a power of 10. Eg: a scale value of 2 (two decimal places)
-	// maps to a multiplication by 100.
-	Scale int
-}
-
-// String returns the string version of the fixed point value.
-func (f FixedPoint[T]) String() string {
-	value := float64(f.Value) / math.Pow10(f.Scale)
-	return fmt.Sprintf("%.*f", f.Scale, value)
-}
-
-// ScaleTo returns a new FixedPoint that is scaled up or down to the given
-// scale.
-func (f FixedPoint[T]) ScaleTo(newScale int) FixedPoint[T] {
-	scaleDiff := newScale - f.Scale
-	multiplier := math.Pow10(scaleDiff)
-	newValue := float64(f.Value) * multiplier
-
-	return FixedPoint[T]{
-		Value: T(newValue),
-		Scale: newScale,
-	}
-}
+// arithScale is the scale used for arithmetic operations. This is used to
+// ensure that we don't lose precision when doing arithmetic operations.
+const arithScale = 11
 
 // MilliSatoshiToUnits converts the given milli-satoshi amount to units using
 // the given price in units per bitcoin as a fixed point in the asset's desired
 // resolution (scale equal to decimal display).
-func MilliSatoshiToUnits(milliSat lnwire.MilliSatoshi,
-	unitsPerBtc FixedPoint[uint64]) uint64 {
+//
+// Given the amount of mSat (X), and the number of units per BTC (Y), we can
+// compute the total amount of units (U) as follows:
+//   - U = (X / M) * Y
+//   - where M is the number of mSAT in a BTC (100,000,000,000).
+func MilliSatoshiToUnits[N Int[N]](milliSat lnwire.MilliSatoshi,
+	unitsPerBtc FixedPoint[N]) FixedPoint[N] {
 
-	oneBtcInMilliSatF := toBigFloat(btcutil.SatoshiPerBitcoin * 1_000)
-	priceUnitsPerBtcF := toBigFloat(unitsPerBtc.Value)
+	// TODO(roasbeef): take max of arith scale and scale of units per btc
 
-	milliSatPerUnitF := new(big.Float)
-	milliSatPerUnitF.Quo(oneBtcInMilliSatF, priceUnitsPerBtcF)
+	// Before we do any computation, we'll scale everything up to our
+	// arithmetric scale.
+	mSatFixed := FixedPointFromUint64[N](
+		uint64(milliSat), arithScale,
+	)
+	scaledUnitsPerBtc := unitsPerBtc.ScaleTo(arithScale)
 
-	invoiceAmountF := toBigFloat(uint64(milliSat))
+	// Next, we'll convert the amount of mSAT to BTC. We do this by
+	// dividing by the number of mSAT in a BTC.
+	oneBtcInMilliSat := FixedPointFromUint64[N](
+		uint64(btcutil.SatoshiPerBitcoin*1_000), arithScale,
+	)
+	amtBTC := mSatFixed.Div(oneBtcInMilliSat)
 
-	units := new(big.Float)
-	units.Quo(invoiceAmountF, milliSatPerUnitF)
+	// Now that we have the amount of BTC as input, and the amount of units
+	// per BTC, we multiply the two to get the total amount of units.
+	amtUnits := amtBTC.Mul(scaledUnitsPerBtc)
 
-	result, _ := units.Uint64()
-	return result
+	// The final response will need to scale back down to the original
+	// amount of units that were passed in.
+	scaledAmt := amtUnits.ScaleTo(unitsPerBtc.Scale)
+
+	return scaledAmt
 }
 
 // UnitsToMilliSatoshi converts the given number of asset units to a
 // milli-satoshi amount, using the given price in units per bitcoin as a fixed
 // point in the asset's desired resolution (scale equal to decimal display).
-func UnitsToMilliSatoshi(assetUnits uint64,
-	unitsPerBtc FixedPoint[uint64]) lnwire.MilliSatoshi {
+//
+// Given the amount of asset units (U), and the number of units per BTC (Y), we
+// compute the total amount of mSAT (X) as follows:
+//   - X = (U / Y) * M
+//   - where M is the number of mSAT in a BTC (100,000,000,000).
+func UnitsToMilliSatoshi[N Int[N]](assetUnits,
+	unitsPerBtc FixedPoint[N]) lnwire.MilliSatoshi {
 
-	oneBtcInMilliSatF := toBigFloat(btcutil.SatoshiPerBitcoin * 1_000)
-	priceUnitsPerBtcF := toBigFloat(unitsPerBtc.Value)
+	// Before we do the computation, we'll scale everything up to our
+	// arithmetic scale.
+	assetUnits = assetUnits.ScaleTo(arithScale)
+	unitsPerBtc = unitsPerBtc.ScaleTo(arithScale)
 
-	milliSatPerUnitF := new(big.Float)
-	milliSatPerUnitF.Quo(oneBtcInMilliSatF, priceUnitsPerBtcF)
+	// We have the number of units, and the number of units per BTC, so we
+	// can arrive at the number of of BTC via: BTC = units / (units/BTC).
+	amtBTC := assetUnits.Div(unitsPerBtc)
 
-	milliSatF := new(big.Float)
-	milliSatF.Mul(milliSatPerUnitF, toBigFloat(assetUnits))
+	// Now that we have the amount of BTC, we can map to mSat by
+	// multiplying by the number of mSAT in a BTC.
+	oneBtcInMilliSat := FixedPointFromUint64[N](
+		uint64(btcutil.SatoshiPerBitcoin*1_000), arithScale,
+	)
 
-	result, _ := milliSatF.Uint64()
-	return lnwire.MilliSatoshi(result)
-}
+	amtMsat := amtBTC.Mul(oneBtcInMilliSat)
 
-// toBigFloat returns the given uint64 as a big.Float.
-func toBigFloat(d uint64) *big.Float {
-	return new(big.Float).SetInt64(int64(d))
+	// We did the computation in terms of the scaled integers, so no we'll
+	// go back to a normal mSAT value scaling down to zero (no decimals)
+	// along the way.
+	return lnwire.MilliSatoshi(amtMsat.ScaleTo(0).ToUint64())
 }

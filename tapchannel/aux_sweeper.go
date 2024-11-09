@@ -784,7 +784,6 @@ func localHtlcTimeoutSweepDesc(req lnwallet.ResolutionReq,
 ) lfn.Result[tapscriptSweepDescs] {
 
 	isIncoming := false
-	localCommit := true
 
 	payHash, err := req.PayHash.UnwrapOrErr(
 		fmt.Errorf("no pay hash"),
@@ -802,7 +801,7 @@ func localHtlcTimeoutSweepDesc(req lnwallet.ResolutionReq,
 	// We'll need to complete the control block to spend the second-level
 	// HTLC, so first we'll make the script tree for the HTLC.
 	htlcScriptTree, err := lnwallet.GenTaprootHtlcScript(
-		isIncoming, localCommit, htlcExpiry,
+		isIncoming, lntypes.Local, htlcExpiry,
 		payHash, req.KeyRing, lfn.None[txscript.TapLeaf](),
 	)
 	if err != nil {
@@ -811,9 +810,8 @@ func localHtlcTimeoutSweepDesc(req lnwallet.ResolutionReq,
 	}
 
 	// Now that we have the script tree, we'll make the control block needed
-	// to spend it, but taking the revoked path.
 	ctrlBlock, err := htlcScriptTree.CtrlBlockForPath(
-		input.ScriptPathSuccess,
+		input.ScriptPathTimeout,
 	)
 	if err != nil {
 		return lfn.Err[tapscriptSweepDescs](err)
@@ -878,7 +876,6 @@ func localHtlcSucessSweepDesc(req lnwallet.ResolutionReq,
 ) lfn.Result[tapscriptSweepDescs] {
 
 	isIncoming := true
-	localCommit := true
 
 	payHash, err := req.PayHash.UnwrapOrErr(
 		fmt.Errorf("no pay hash"),
@@ -896,7 +893,7 @@ func localHtlcSucessSweepDesc(req lnwallet.ResolutionReq,
 	// We'll need to complete the control block to spend the second-level
 	// HTLC, so first we'll make the script tree for the HTLC.
 	htlcScriptTree, err := lnwallet.GenTaprootHtlcScript(
-		isIncoming, localCommit, htlcExpiry,
+		isIncoming, lntypes.Local, htlcExpiry,
 		payHash, req.KeyRing, lfn.None[txscript.TapLeaf](),
 	)
 	if err != nil {
@@ -905,7 +902,7 @@ func localHtlcSucessSweepDesc(req lnwallet.ResolutionReq,
 	}
 
 	// Now that we have the script tree, we'll make the control block needed
-	// to spend it, but taking the revoked path.
+	// to spend it, but taking the success path.
 	ctrlBlock, err := htlcScriptTree.CtrlBlockForPath(
 		input.ScriptPathSuccess,
 	)

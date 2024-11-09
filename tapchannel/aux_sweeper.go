@@ -1966,7 +1966,7 @@ func newBlobWithWitnessInfo(i input.Input) lfn.Result[blobWithWitnessInfo] {
 	// from the inner struct, so we can update the witness stack.
 	var (
 		preimageInfo lfn.Option[preimageDesc]
-		secondLevel  = true
+		secondLevel  bool
 	)
 	switch i.WitnessType() {
 
@@ -2039,8 +2039,8 @@ func prepVpkts(bRes lfn.Result[blobWithWitnessInfo],
 	if err != nil {
 		return nil, err
 	}
-	var res cmsg.ContractResolution
 
+	var res cmsg.ContractResolution
 	err = res.Decode(bytes.NewReader(b.resolutionBlob))
 	if err != nil {
 		return nil, err
@@ -2052,22 +2052,19 @@ func prepVpkts(bRes lfn.Result[blobWithWitnessInfo],
 	pkts := res.Vpkts1()
 	if secondLevel {
 		pkts = res.Vpkts2()
+		tapSigDesc = res.SigDescs()
 	}
 
 	b.preimageInfo.WhenSome(func(p preimageDesc) {
-		vIns := fn.FlatMap(
-			pkts,
-			func(vPkt *tappsbt.VPacket) []*tappsbt.VInput {
-				return vPkt.Inputs
-			},
-		)
+		for _, pkt := range pkts {
+			newAsset := pkt.Outputs[0].Asset
 
-		for _, vIn := range vIns {
-			prevWitness := vIn.Asset().PrevWitnesses[0].TxWitness
-			vIn.Asset().PrevWitnesses[0].TxWitness = slices.Insert(
+			prevWitness := newAsset.PrevWitnesses[0].TxWitness
+			prevWitness = slices.Insert(
 				prevWitness, p.witnessIndex,
 				p.preimage[:],
 			)
+			newAsset.UpdateTxWitness(0, prevWitness)
 		}
 	})
 
@@ -2139,7 +2136,6 @@ func extractInputVPackets(inputs []input.Input) lfn.Result[sweepVpkts] {
 			return lfn.Err[sweepVpkts](err)
 		}
 
-		vPkts2 = append(vPkts1, *vpkt)
 	}
 
 	return lfn.Ok(sweepVpkts{

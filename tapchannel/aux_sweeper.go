@@ -206,16 +206,25 @@ func (a *AuxSweeper) createSweepVpackets(sweepInputs []*cmsg.AssetOutput,
 	// the output information locked in, as this was a pre-signed
 	// transaction.
 	if sweepDesc.auxSigInfo.IsSome() {
+		log.Infof("Re-creating second level HTLC vPkt to "+
+			"spend: %v", resReq.ContractPoint)
+
+		var cltvTimeout fn.Option[uint32]
+		sweepDesc.absoluteDelay.WhenSome(func(delay uint64) {
+			cltvTimeout = fn.Some(uint32(delay))
+		})
+
+		// When we create the 2nd level allocation, we set the output
+		// index to be None, as we don't know exactly _where_ on the
+		// sweep transaction this output will lie.
 		alloc, err := createSecondLevelHtlcAllocations(
 			resReq.ChanType, resReq.Initiator, sweepInputs,
 			resReq.HtlcAmt, resReq.CommitCsvDelay, *resReq.KeyRing,
-			fn.Some(resReq.ContractPoint.Index),
+			fn.None[uint32](), cltvTimeout,
 		)
 		if err != nil {
 			return lfn.Err[returnType](err)
 		}
-
-		// TODO(roasbeef): allocation needs precise output index set?
 
 		allocs = append(allocs, alloc...)
 	} else {

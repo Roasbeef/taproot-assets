@@ -454,6 +454,7 @@ func DistributeCoins(inputs []*proof.Proof, allocations []*Allocation,
 				AnchorOutputTapscriptSibling: sibling,
 				ScriptKey:                    a.ScriptKey,
 				ProofDeliveryAddress:         deliveryAddr,
+				RelativeLockTime:             uint64(a.Sequence),
 			}
 			p.packet.Outputs = append(p.packet.Outputs, vOut)
 

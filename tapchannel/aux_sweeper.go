@@ -460,6 +460,20 @@ type vPktsWithInput struct {
 	tapSigDesc lfn.Option[cmsg.TapscriptSigDesc]
 }
 
+// isPresigned returns true if the vPktsWithInput is presigned. This will be the
+// for an HTLC spent directly from our local commitment transaction.
+func (v vPktsWithInput) isPresigned() bool {
+	witType := v.btcInput.WitnessType()
+	switch witType {
+	case input.TaprootHtlcAcceptedLocalSuccess:
+		return true
+	case input.TaprootHtlcLocalOfferedTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
 // sweepVpkts contains the set of vPkts needed for sweeping an output. Most
 // outputs will only have the first level specified. The second level is needed
 // for HTLC outputs on our local commitment transaction.
@@ -499,6 +513,27 @@ func (s sweepVpkts) secondLevelPkts() []*tappsbt.VPacket {
 // allPkts returns a slice of both the first and second level pkts.
 func (s sweepVpkts) allPkts() []*tappsbt.VPacket {
 	return append(s.firstLevelPkts(), s.secondLevelPkts()...)
+}
+
+// allVpktsWithInput returns a slice of all vPktsWithInput.
+func (s sweepVpkts) allVpktsWithInput() []vPktsWithInput {
+	return append(s.firstLevel, s.secondLevel...)
+}
+
+// directSpendPkts returns the slice of all vPkts that are a direct spend from
+// the commitment transaction. This excludes vPkts that are the pre-signed 2nd
+// level transaction variant.
+func (s sweepVpkts) directSpendPkts() []*tappsbt.VPacket {
+	directSpends := lfn.Filter(func(vi vPktsWithInput) bool {
+		return !vi.isPresigned()
+	}, s.allVpktsWithInput())
+	directPkts := fn.FlatMap(
+		directSpends, func(v vPktsWithInput) []*tappsbt.VPacket {
+			return v.vPkts
+		},
+	)
+
+	return directPkts
 }
 
 // createAndSignSweepVpackets creates vPackets that sweep the funds from the
@@ -1177,6 +1212,7 @@ func deriveCommitKeys(req lnwallet.ResolutionReq) (*asset.ScriptKey,
 // importCommitScriptKeys imports the script keys for the commitment outputs
 // into the local addr book.
 func (a *AuxSweeper) importCommitScriptKeys(req lnwallet.ResolutionReq) error {
+
 	// Generate the local and remote script key, so we can properly import
 	// into the addr book, like we did above.
 	localCommitScriptKey, remoteCommitScriptKey, err := deriveCommitKeys(
@@ -1815,44 +1851,68 @@ func (a *AuxSweeper) resolveContract(
 		return lfn.Err[tlv.Blob](err)
 	}
 
-	// We can't yet make the second level proof as we don't know exactly
-	// what the final txid of the sweep transaction will be. So we'll use a
-	// blank proof in place.
-	//
-	// TODO(roasbeef): need to set internal key? already known
-	var proof proof.Proof
+	var (
+		secondLevelPkts    []*tappsbt.VPacket
+		secondLevelSigDesc lfn.Option[cmsg.TapscriptSigDesc]
+	)
 
-	// We'll make a place holder for the second level output based on the
-	// assetID+value tuple.
-	secondLevelInputs := []*cmsg.AssetOutput{cmsg.NewAssetOutput(
-		assetOutputs[0].AssetID.Val, assetOutputs[0].Amount.Val, proof,
-	)}
+	// We'll only need a set of second level packets if we're sweeping a set
+	// of HTLC outputs on the local party's commitment transaction.
+	if needsSecondLevel {
+		log.Infof("Creating+signing 2nd level vPkts")
 
-	// Unlike the first level packets, we can't yet sign the second level
-	// packets yet, as we don't know what the sweeping transaction will look
-	// like. So we'll just create them.
-	secondLevelPkts, err := lfn.MapOption(
-		func(desc tapscriptSweepDesc) lfn.Result[[]*tappsbt.VPacket] {
-			return a.createSweepVpackets(
-				secondLevelInputs, lfn.Ok(desc), req,
-			)
-		},
-	)(tapSweepDesc.secondLevel).UnwrapOr(
-		lfn.Ok[[]*tappsbt.VPacket](nil),
-	).Unpack()
-	if err != nil {
-		return lfn.Err[tlv.Blob](err)
+		// We'll make a place holder for the second level output based
+		// on the assetID+value tuple.
+		secondLevelInputs := []*cmsg.AssetOutput{cmsg.NewAssetOutput(
+			assetOutputs[0].AssetID.Val,
+			assetOutputs[0].Amount.Val, assetOutputs[0].Proof.Val,
+		)}
+
+		// Unlike the first level packets, we can't yet sign the second
+		// level packets yet, as we don't know what the sweeping
+		// transaction will look like. So we'll just create them.
+		secondLevelPkts, err = lfn.MapOption(
+			func(desc tapscriptSweepDesc) lfn.Result[[]*tappsbt.VPacket] {
+				return a.createSweepVpackets(
+					secondLevelInputs, lfn.Ok(desc), req,
+				)
+			},
+		)(tapSweepDesc.secondLevel).UnwrapOr(
+			lfn.Ok[[]*tappsbt.VPacket](nil),
+		).Unpack()
+		if err != nil {
+			return lfn.Errf[tlv.Blob]("unable to make "+
+				"second level pkts: %w", err)
+		}
+
+		// We'll update some of the details of the 2nd level pkt based
+		// on the first lvl packet created above (as we don't yet have
+		// the full proof for the first lvl packet above).
+		for pktIdx, vPkt := range secondLevelPkts {
+			prevAsset := firstLevelPkts[pktIdx].Outputs[0].Asset
+
+			for inputIdx, vIn := range vPkt.Inputs {
+				//nolint:lll
+				prevScriptKey := prevAsset.ScriptKey
+				vIn.PrevID.ScriptKey = asset.ToSerialized(
+					prevScriptKey.PubKey,
+				)
+
+				vPkt.SetInputAsset(inputIdx, prevAsset)
+			}
+		}
+
+		// With the vPackets fully generated and signed above, we'll
+		// serialize it into a resolution blob to return.
+		secondLevelSigDesc = lfn.MapOption(
+			func(d tapscriptSweepDesc) cmsg.TapscriptSigDesc {
+				return cmsg.NewTapscriptSigDesc(
+					d.scriptTree.TapTweak(),
+					d.ctrlBlockBytes,
+				)
+			},
+		)(tapSweepDesc.secondLevel)
 	}
-
-	// With the vPackets fully generated and signed above, we'll serialize
-	// it into a resolution blob to return.
-	secondLevelSigDesc := lfn.MapOption(
-		func(d tapscriptSweepDesc) cmsg.TapscriptSigDesc {
-			return cmsg.NewTapscriptSigDesc(
-				d.scriptTree.TapTweak(), d.ctrlBlockBytes,
-			)
-		},
-	)(tapSweepDesc.secondLevel)
 
 	res := cmsg.NewContractResolution(
 		firstLevelPkts, secondLevelPkts, secondLevelSigDesc,

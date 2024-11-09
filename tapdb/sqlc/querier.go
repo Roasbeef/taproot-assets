@@ -25,6 +25,7 @@ type Querier interface {
 	BindMintingBatchWithTx(ctx context.Context, arg BindMintingBatchWithTxParams) error
 	ConfirmChainAnchorTx(ctx context.Context, arg ConfirmChainAnchorTxParams) error
 	ConfirmChainTx(ctx context.Context, arg ConfirmChainTxParams) error
+	DeclareScriptKeyKnown(ctx context.Context, tweakedScriptKey []byte) error
 	DeleteAllNodes(ctx context.Context, namespace string) (int64, error)
 	DeleteAssetWitnesses(ctx context.Context, assetID int64) error
 	DeleteExpiredUTXOLeases(ctx context.Context, now sql.NullTime) error

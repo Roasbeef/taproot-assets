@@ -857,6 +857,10 @@ INSERT INTO script_keys (
     DO UPDATE SET tweaked_script_key = EXCLUDED.tweaked_script_key
 RETURNING script_key_id;
 
+-- name: DeclareScriptKeyKnown :exec
+UPDATE script_keys
+SET declared_known = TRUE
+WHERE tweaked_script_key = $1;
 -- name: FetchScriptKeyIDByTweakedKey :one
 SELECT script_key_id
 FROM script_keys

@@ -438,6 +438,17 @@ func (q *Queries) ConfirmChainTx(ctx context.Context, arg ConfirmChainTxParams) 
 	return err
 }
 
+const declareScriptKeyKnown = `-- name: DeclareScriptKeyKnown :exec
+UPDATE script_keys
+SET declared_known = TRUE
+WHERE tweaked_script_key = $1
+`
+
+func (q *Queries) DeclareScriptKeyKnown(ctx context.Context, tweakedScriptKey []byte) error {
+	_, err := q.db.ExecContext(ctx, declareScriptKeyKnown, tweakedScriptKey)
+	return err
+}
+
 const deleteExpiredUTXOLeases = `-- name: DeleteExpiredUTXOLeases :exec
 UPDATE managed_utxos
 SET lease_owner = NULL, lease_expiry = NULL

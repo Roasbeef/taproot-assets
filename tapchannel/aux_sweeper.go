@@ -2174,31 +2174,44 @@ func (a *AuxSweeper) registerAndBroadcastSweep(req *sweep.BumpRequest,
 		return nil
 	}
 
-	ourSweepOutput, err := req.ExtraTxOut.UnwrapOrErr(
-		fmt.Errorf("extra tx out not populated"),
-	)
-	if err != nil {
-		return err
-	}
-	internalKey, err := ourSweepOutput.InternalKey.UnwrapOrErr(
-		fmt.Errorf("internal key not populated"),
-	)
-	if err != nil {
-		return err
-	}
-
-	log.Infof("Using %x for internal key: ",
-		internalKey.PubKey.SerializeCompressed())
-
-	// We'll also use the passed in context to set the anchor key again for
-	// all the vOuts, but only for first level vPkts, as second level
-	// packets already commit to the internal key of the vOut.
-	for idx := range vPkts.firstLevelPkts() {
-		for _, vOut := range vPkts.firstLevelPkts()[idx].Outputs {
-			vOut.SetAnchorInternalKey(
-				internalKey, a.cfg.ChainParams.HDCoinType,
+	// If this is a transaction that's only sweeping HTLC outputs via a
+	// pre-signed transaction, then we won't actually have an extra sweep
+	// output.
+	err = lfn.MapOptionZ(
+		req.ExtraTxOut,
+		func(extraTxOut sweep.SweepOutput) error {
+			ourSweepOutput, err := req.ExtraTxOut.UnwrapOrErr(
+				fmt.Errorf("extra tx out not populated"),
 			)
-		}
+			if err != nil {
+				return err
+			}
+			iKey, err := ourSweepOutput.InternalKey.UnwrapOrErr(
+				fmt.Errorf("internal key not populated"),
+			)
+			if err != nil {
+				return err
+			}
+
+			// We'll also use the passed in context to set the
+			// anchor key again for all the vOuts, but only for
+			// first level vPkts, as second level packets already
+			// commit to the internal key of the vOut.
+			vPkts := vPkts.directSpendPkts()
+			for idx := range vPkts {
+				for _, vOut := range vPkts[idx].Outputs {
+					vOut.SetAnchorInternalKey(
+						iKey,
+						a.cfg.ChainParams.HDCoinType,
+					)
+				}
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return err
 	}
 
 	// For any second level outputs we're sweeping, we'll need to sign for

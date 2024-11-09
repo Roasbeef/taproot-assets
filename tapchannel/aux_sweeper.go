@@ -2208,6 +2208,12 @@ func (a *AuxSweeper) registerAndBroadcastSweep(req *sweep.BumpRequest,
 			for _, vIn := range vPkt.Inputs {
 				vIn.PrevID.OutPoint = sweepSet.btcInput.OutPoint()
 			}
+			for _, vOut := range vPkt.Outputs {
+				vOut.Asset.PrevWitnesses[0].PrevID.OutPoint = sweepSet.btcInput.OutPoint()
+			}
+		}
+	}
+
 	// For pre-signed HTLC txns we'll need to make sure we update the output
 	// index in the vPkt. As the ordering is only determined at broadcast
 	// time.

@@ -761,7 +761,8 @@ func (s *Server) FetchLeavesFromView(
 // nolint:lll
 func (s *Server) FetchLeavesFromCommit(chanState lnwl.AuxChanState,
 	com channeldb.ChannelCommitment,
-	keys lnwl.CommitmentKeyRing) lfn.Result[lnwl.CommitDiffAuxResult] {
+	keys lnwl.CommitmentKeyRing,
+	whoseCommit lntypes.ChannelParty) lfn.Result[lnwl.CommitDiffAuxResult] {
 
 	srvrLog.Debugf("FetchLeavesFromCommit called, ourBalance=%v, "+
 		"theirBalance=%v, numHtlcs=%d", com.LocalBalance,
@@ -770,7 +771,7 @@ func (s *Server) FetchLeavesFromCommit(chanState lnwl.AuxChanState,
 	// The aux leaf creator is fully stateless, and we don't need to wait
 	// for the server to be started before being able to use it.
 	return tapchannel.FetchLeavesFromCommit(
-		s.chainParams, chanState, com, keys,
+		s.chainParams, chanState, com, keys, whoseCommit,
 	)
 }
 

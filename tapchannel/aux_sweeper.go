@@ -580,7 +580,7 @@ type tapscriptSweepDescs struct {
 func commitNoDelaySweepDesc(keyRing *lnwallet.CommitmentKeyRing,
 	csvDelay uint32) lfn.Result[tapscriptSweepDescs] {
 
-	type returnType = tapscriptSweepDesc
+	type returnType = tapscriptSweepDescs
 
 	// We'll make the script tree for the to remote script (we're remote as
 	// this is their commitment transaction). We don't have an auxLeaf here
@@ -599,6 +599,7 @@ func commitNoDelaySweepDesc(keyRing *lnwallet.CommitmentKeyRing,
 		input.ScriptPathSuccess,
 	)
 	if err != nil {
+		return lfn.Err[returnType](err)
 	}
 	ctrlBlockBytes, err := ctrlBlock.ToBytes()
 	if err != nil {
@@ -621,7 +622,7 @@ func commitNoDelaySweepDesc(keyRing *lnwallet.CommitmentKeyRing,
 func commitDelaySweepDesc(keyRing *lnwallet.CommitmentKeyRing,
 	csvDelay uint32) lfn.Result[tapscriptSweepDescs] {
 
-	type returnType = tapscriptSweepDesc
+	type returnType = tapscriptSweepDescs
 
 	// We'll make the script tree for the to remote script (we're remote as
 	// this is their commitment transaction). We don't have an auxLeaf here
@@ -640,6 +641,7 @@ func commitDelaySweepDesc(keyRing *lnwallet.CommitmentKeyRing,
 		input.ScriptPathSuccess,
 	)
 	if err != nil {
+		return lfn.Err[returnType](err)
 	}
 	ctrlBlockBytes, err := ctrlBlock.ToBytes()
 	if err != nil {
@@ -661,7 +663,7 @@ func commitDelaySweepDesc(keyRing *lnwallet.CommitmentKeyRing,
 func commitRevokeSweepDesc(keyRing *lnwallet.CommitmentKeyRing,
 	csvDelay uint32) lfn.Result[tapscriptSweepDescs] {
 
-	type returnType = tapscriptSweepDesc
+	type returnType = tapscriptSweepDescs
 
 	// To sweep their revoked output, we'll make the script tree for the
 	// local tree of their commitment transaction, which is actually their
@@ -704,8 +706,9 @@ func remoteHtlcTimeoutSweepDesc(keyRing *lnwallet.CommitmentKeyRing,
 	// We're sweeping a timed out HTLC, which means that we'll need to
 	// create the receiver's HTLC script tree (from the remote party's PoV).
 	htlcScriptTree, err := input.ReceiverHTLCScriptTaproot(
-		htlcExpiry, keyRing.ToLocalKey, keyRing.ToRemoteKey,
-		keyRing.RevocationKey, payHash, false, input.NoneTapLeaf(),
+		htlcExpiry, keyRing.LocalHtlcKey, keyRing.RemoteHtlcKey,
+		keyRing.RevocationKey, payHash, lntypes.Remote,
+		input.NoneTapLeaf(),
 	)
 	if err != nil {
 		return lfn.Err[tapscriptSweepDescs](err)
@@ -738,15 +741,15 @@ func remoteHtlcTimeoutSweepDesc(keyRing *lnwallet.CommitmentKeyRing,
 // the remote party's commitment transaction that we can sweep with the
 // preimage.
 func remoteHtlcSuccessSweepDesc(keyRing *lnwallet.CommitmentKeyRing,
-	payHash []byte, csvDelay uint32,
-	auxSigs lfn.Option[lnwallet.AuxSigDesc]) lfn.Result[tapscriptSweepDescs] {
+	payHash []byte, csvDelay uint32) lfn.Result[tapscriptSweepDescs] {
 
 	// We're planning on sweeping an HTLC that we know the preimage to,
 	// which the remote party sent, so we'll construct the sender version of
 	// the HTLC script tree (from their PoV, they're the sender).
 	htlcScriptTree, err := input.SenderHTLCScriptTaproot(
-		keyRing.ToLocalKey, keyRing.ToRemoteKey, keyRing.RevocationKey,
-		payHash, false, input.NoneTapLeaf(),
+		keyRing.RemoteHtlcKey, keyRing.LocalHtlcKey,
+		keyRing.RevocationKey, payHash, lntypes.Remote,
+		input.NoneTapLeaf(),
 	)
 	if err != nil {
 		return lfn.Err[tapscriptSweepDescs](err)

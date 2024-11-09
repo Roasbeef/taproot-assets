@@ -1218,6 +1218,42 @@ func (a *AuxSweeper) importCommitScriptKeys(req lnwallet.ResolutionReq) error {
 	return nil
 }
 
+// importOutputScriptKey imports the output script key that this scriptDesc can
+// spend into the local addr book.
+func (a *AuxSweeper) importOutputScriptKeys(desc tapscriptSweepDescs) error {
+	ctxb := context.Background()
+
+	importScriptKey := func(desc tapscriptSweepDesc) error {
+		scriptTree := desc.scriptTree.Tree()
+
+		outputKey := asset.NewScriptKey(scriptTree.TaprootKey).PubKey
+		scriptKey := asset.ScriptKey{
+			PubKey: outputKey,
+			TweakedScriptKey: &asset.TweakedScriptKey{
+				RawKey: keychain.KeyDescriptor{
+					PubKey: scriptTree.InternalKey,
+				},
+				Tweak: scriptTree.TapscriptRoot,
+			},
+		}
+
+		log.Debugf("Importing script_keys=%v", spew.Sdump(scriptKey))
+
+		return a.cfg.AddrBook.InsertScriptKey(ctxb, scriptKey, true)
+	}
+
+	if err := importScriptKey(desc.firstLevel); err != nil {
+		return err
+	}
+
+	return lfn.MapOptionZ(
+		desc.secondLevel,
+		func(secondary tapscriptSweepDesc) error {
+			return importScriptKey(secondary)
+		},
+	)
+}
+
 // importOutputProofs imports the output proofs into the pending asset funding
 // into our local database. This preps us to be able to detect force closes.
 func importOutputProofs(scid lnwire.ShortChannelID,
@@ -1586,34 +1622,10 @@ func (a *AuxSweeper) resolveContract(
 		return lfn.Err[returnType](err)
 	}
 
-	// To be able to construct all the proofs we need to spend later, we'll
-	// make sure that this commitment transaction exists in our database.
-	// If not, then we'll complete the proof, register the script keys, and
-	// ship the pre-signed commitment transaction.
-	ctx := context.Background()
-	commitParcel, err := a.cfg.TxSender.QueryParcels(
-		ctx, fn.Some(req.CommitTx.TxHash()), false,
-	)
-	if err != nil {
-		return lfn.Err[returnType](err)
-	}
-	if len(commitParcel) == 0 {
-		log.Infof("First time seeing commit_txid=%v, importing",
-			req.CommitTx.TxHash())
-
-		err := a.importCommitTx(req, commitState, fundingInfo)
-		if err != nil {
-			return lfn.Errf[returnType]("unable to import "+
-				"commitment txn: %w", err)
-		}
-	} else {
-		log.Infof("Commitment commit_txid=%v already imported, "+
-			"skipping", req.CommitTx.TxHash())
-	}
-
 	var (
-		sweepDesc    lfn.Result[tapscriptSweepDescs]
-		assetOutputs []*cmsg.AssetOutput
+		sweepDesc        lfn.Result[tapscriptSweepDescs]
+		assetOutputs     []*cmsg.AssetOutput
+		needsSecondLevel bool
 	)
 
 	switch req.Type {
@@ -1722,6 +1734,8 @@ func (a *AuxSweeper) resolveContract(
 		// desc.
 		sweepDesc = localHtlcTimeoutSweepDesc(req)
 
+		needsSecondLevel = true
+
 	// In this case, we've broadcast a commitment, with an incoming HTLC
 	// that we can sweep. We'll annotate the sweepDesc with the information
 	// needed to sweep both this output, as well as the second level
@@ -1736,10 +1750,50 @@ func (a *AuxSweeper) resolveContract(
 		// desc.
 		sweepDesc = localHtlcSucessSweepDesc(req)
 
+		needsSecondLevel = true
+
 	default:
 		return lfn.Errf[returnType]("unknown resolution type: %v",
 			req.Type)
 		// TODO(roasbeef): need to do HTLC revocation casesj:w
+	}
+
+	tapSweepDesc, err := sweepDesc.Unpack()
+	if err != nil {
+		return lfn.Err[tlv.Blob](err)
+	}
+
+	// Now that we know what output we're sweeping, before we proceed, we'll
+	// import the relevant script key to disk. This way, we'll properly
+	// recognize spends of it.
+	if err := a.importOutputScriptKeys(tapSweepDesc); err != nil {
+		return lfn.Errf[tlv.Blob]("unable to import output script "+
+			"key: %w", err)
+	}
+
+	// To be able to construct all the proofs we need to spend later, we'll
+	// make sure that this commitment transaction exists in our database. If
+	// not, then we'll complete the proof, register the script keys, and
+	// ship the pre-signed commitment transaction.
+	ctx := context.Background()
+	commitParcel, err := a.cfg.TxSender.QueryParcels(
+		ctx, fn.Some(req.CommitTx.TxHash()), false,
+	)
+	if err != nil {
+		return lfn.Err[returnType](err)
+	}
+	if len(commitParcel) == 0 {
+		log.Infof("First time seeing commit_txid=%v, importing",
+			req.CommitTx.TxHash())
+
+		err := a.importCommitTx(req, commitState, fundingInfo)
+		if err != nil {
+			return lfn.Errf[returnType]("unable to import "+
+				"commitment txn: %w", err)
+		}
+	} else {
+		log.Infof("Commitment commit_txid=%v already imported, "+
+			"skipping", req.CommitTx.TxHash())
 	}
 
 	// The input proofs above were made originally using the fake commit tx
@@ -1752,15 +1806,10 @@ func (a *AuxSweeper) resolveContract(
 	log.Infof("Sweeping %v asset outputs: %v", len(assetOutputs),
 		limitSpewer.Sdump(assetOutputs))
 
-	tapSweepDesc, err := sweepDesc.Unpack()
-	if err != nil {
-		return lfn.Err[tlv.Blob](err)
-	}
-
 	// With the sweep desc constructed above, we'll create vPackets for each
 	// of the local assets, then sign them all.
 	firstLevelPkts, err := a.createAndSignSweepVpackets(
-		lfn.Ok(tapSweepDesc.firstLevel), assetOutputs, req,
+		assetOutputs, req, lfn.Ok(tapSweepDesc.firstLevel),
 	).Unpack()
 	if err != nil {
 		return lfn.Err[tlv.Blob](err)

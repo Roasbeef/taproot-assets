@@ -749,6 +749,8 @@ func remoteHtlcTimeoutSweepDesc(keyRing *lnwallet.CommitmentKeyRing,
 		return lfn.Err[tapscriptSweepDescs](err)
 	}
 
+	// TODO(roasbeef): use GenTaprootHtlcScript instead?
+
 	// Now that we have the script tree, we'll make the control block needed
 	// to spend it, but taking the revoked path.
 	ctrlBlock, err := htlcScriptTree.CtrlBlockForPath(
@@ -1969,8 +1971,8 @@ func newBlobWithWitnessInfo(i input.Input) lfn.Result[blobWithWitnessInfo] {
 		secondLevel  bool
 	)
 	switch i.WitnessType() {
-
 	// This is the case when we're sweeping the HTLC output on our local
+
 	// commitment transaction via a second level HTLC.
 	//
 	// The final witness stack is:
@@ -2136,6 +2138,7 @@ func extractInputVPackets(inputs []input.Input) lfn.Result[sweepVpkts] {
 			return lfn.Err[sweepVpkts](err)
 		}
 
+		vPkts2 = append(vPkts2, *vpkt)
 	}
 
 	return lfn.Ok(sweepVpkts{
@@ -2173,14 +2176,15 @@ func (a *AuxSweeper) sweepContracts(inputs []input.Input,
 	log.Infof("Generating anchor output for vpkts=%v",
 		limitSpewer.Sdump(sPkts))
 
-	// Second level packets will already be anchored to the output assigned
-	// to it, so we only need to re-create the commitment for the first
-	// level outputs, which can be swept directly into the wallet.
-	firstLevelVpkts := sPkts.firstLevelPkts()
+	// If this is a sweep from the local commitment transaction. Then we'll
+	// have both the first and second level sweeps. However for the first
+	// sweep, it's a broadcast of a pre-signed transaction, so we don't need
+	// an anchor output for those.
+	directPkts := sPkts.directSpendPkts()
 
-	// If there're no first level vPkts, then we can just return a nil error
-	// as we don't have a real sweep output to create.
-	if len(firstLevelVpkts) == 0 {
+	// If there're no direct level vPkts, then we can just return a nil
+	// error as we don't have a real sweep output to create.
+	if len(directPkts) == 0 {
 		return lfn.Err[sweep.SweepOutput](nil)
 	}
 
@@ -2195,17 +2199,32 @@ func (a *AuxSweeper) sweepContracts(inputs []input.Input,
 	if err != nil {
 		return lfn.Err[returnType](err)
 	}
-	for idx := range firstLevelVpkts {
-		for _, vOut := range firstLevelVpkts[idx].Outputs {
+	for idx := range directPkts {
+		for _, vOut := range directPkts[idx].Outputs {
 			vOut.SetAnchorInternalKey(
 				internalKey, a.cfg.ChainParams.HDCoinType,
 			)
 		}
 	}
 
+	// For any second level outputs we're sweeping, we'll need to sign for
+	// it, as now we know the txid of the sweeping transaction. We'll do
+	// this again when we register for the final broadcast, we we need to
+	// sign the right prevIDs.
+	for _, sweepSet := range sPkts.secondLevel {
+		for _, vPkt := range sweepSet.vPkts {
+			for _, vIn := range vPkt.Inputs {
+				vIn.PrevID.OutPoint = sweepSet.btcInput.OutPoint()
+			}
+			for _, vOut := range vPkt.Outputs {
+				vOut.Asset.PrevWitnesses[0].PrevID.OutPoint = sweepSet.btcInput.OutPoint()
+			}
+		}
+	}
+
 	// Now that we have our set of resolutions, we'll make a new commitment
 	// out of all the vPackets contained.
-	outCommitments, err := tapsend.CreateOutputCommitments(firstLevelVpkts)
+	outCommitments, err := tapsend.CreateOutputCommitments(directPkts)
 	if err != nil {
 		return lfn.Errf[returnType]("unable to create "+
 			"output commitments: %w", err)

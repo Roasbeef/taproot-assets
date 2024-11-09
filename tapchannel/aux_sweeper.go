@@ -810,6 +810,7 @@ func localHtlcTimeoutSweepDesc(req lnwallet.ResolutionReq,
 	}
 
 	// Now that we have the script tree, we'll make the control block needed
+	// to spend it, but taking the timeout path.
 	ctrlBlock, err := htlcScriptTree.CtrlBlockForPath(
 		input.ScriptPathTimeout,
 	)
@@ -958,7 +959,6 @@ func localHtlcSucessSweepDesc(req lnwallet.ResolutionReq,
 			scriptTree:          htlcScriptTree,
 			ctrlBlockBytes:      ctrlBlockBytes,
 			relativeDelay:       lfn.Some(uint64(req.CsvDelay)),
-			absoluteDelay:       lfn.Some(uint64(htlcExpiry)),
 			auxSigInfo:          req.AuxSigDesc,
 			secondLevelSigIndex: sigIndex,
 		},

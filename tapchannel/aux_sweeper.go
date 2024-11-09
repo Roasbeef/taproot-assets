@@ -1661,7 +1661,9 @@ func (a *AuxSweeper) resolveContract(
 		// assets for the remote party, which are actually the HTLCs we
 		// sent outgoing. We only care about this particular HTLC, so
 		// we'll filter out the rest.
-		htlcOutputs := commitState.IncomingHtlcAssets.Val
+		//
+		// TODO(roasbeef): fix comment above?
+		htlcOutputs := commitState.OutgoingHtlcAssets.Val
 		assetOutputs = htlcOutputs.FilterByHtlcIndex(
 			req.HtlcID.UnwrapOr(math.MaxUint64),
 		)
@@ -1686,7 +1688,7 @@ func (a *AuxSweeper) resolveContract(
 		// In this case, it's an outgoing HTLC from the PoV of the
 		// remote party, which is incoming for us. We'll only sweep this
 		// HTLC, so we'll filter out the rest.
-		htlcOutputs := commitState.OutgoingHtlcAssets.Val
+		htlcOutputs := commitState.IncomingHtlcAssets.Val
 		assetOutputs = htlcOutputs.FilterByHtlcIndex(
 			req.HtlcID.UnwrapOr(math.MaxUint64),
 		)
@@ -1702,7 +1704,6 @@ func (a *AuxSweeper) resolveContract(
 		// sweep desc for the timeout txn.
 		sweepDesc = remoteHtlcSuccessSweepDesc(
 			req.KeyRing, payHash[:], req.CsvDelay,
-			req.AuxSigDesc,
 		)
 
 	// In this case, we broadcast a commitment transaction which held an
@@ -1726,7 +1727,7 @@ func (a *AuxSweeper) resolveContract(
 	// needed to sweep both this output, as well as the second level
 	// output it creates.
 	case input.TaprootHtlcAcceptedLocalSuccess:
-		htlcOutputs := commitState.OutgoingHtlcAssets.Val
+		htlcOutputs := commitState.IncomingHtlcAssets.Val
 		assetOutputs = htlcOutputs.FilterByHtlcIndex(
 			req.HtlcID.UnwrapOr(math.MaxUint64),
 		)

@@ -681,7 +681,7 @@ func (t *TapAddressBook) InsertScriptKey(ctx context.Context,
 	scriptKey asset.ScriptKey, declaredKnown bool) error {
 
 	var writeTxOpts AddrBookTxOptions
-	return t.db.ExecTx(ctx, &writeTxOpts, func(q AddrBook) error {
+	err := t.db.ExecTx(ctx, &writeTxOpts, func(q AddrBook) error {
 		internalKeyID, err := insertInternalKey(
 			ctx, q, scriptKey.RawKey,
 		)
@@ -689,14 +689,33 @@ func (t *TapAddressBook) InsertScriptKey(ctx context.Context,
 			return fmt.Errorf("error inserting internal key: %w",
 				err)
 		}
+
 		_, err = q.UpsertScriptKey(ctx, NewScriptKey{
 			InternalKeyID:    internalKeyID,
 			TweakedScriptKey: scriptKey.PubKey.SerializeCompressed(),
 			Tweak:            scriptKey.Tweak,
 			DeclaredKnown:    sqlBool(declaredKnown),
 		})
-		return err
+		if err != nil {
+			return fmt.Errorf("error inserting script key: %w", err)
+		}
+
+		// This key might already exist, so we'll make sure that
+		// declared_known is set to true. Otherwise, if the key already
+		// existed, and we need to view it as ours, we'll fail to do so.
+		if declaredKnown {
+			return q.DeclareScriptKeyKnown(
+				ctx, scriptKey.PubKey.SerializeCompressed(),
+			)
+		}
+
+		return nil
 	})
+	if err != nil {
+		return fmt.Errorf("error inserting script key: %w", err)
+	}
+
+	return nil
 }
 
 // GetOrCreateEvent creates a new address event for the given status, address

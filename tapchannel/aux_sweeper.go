@@ -427,11 +427,13 @@ func (a *AuxSweeper) signSweepVpackets(vPackets []*tappsbt.VPacket,
 					byte(auxSig.SigHashType.Val),
 				)
 
-				prevWitness := vIn.Asset().PrevWitnesses[0].TxWitness
-				vIn.Asset().PrevWitnesses[0].TxWitness = slices.Insert(
-					prevWitness, int(sigIndex),
-					auxSigBytes,
+				newAsset := vPacket.Outputs[0].Asset
+
+				prevWitness := newAsset.PrevWitnesses[0].TxWitness
+				prevWitness = slices.Insert(
+					prevWitness, int(sigIndex), auxSigBytes,
 				)
+				newAsset.UpdateTxWitness(0, prevWitness)
 
 				return nil
 			},

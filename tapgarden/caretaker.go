@@ -1514,6 +1514,13 @@ func (b *BatchCaretaker) sendSupplyCommitEvents(ctx context.Context,
 			return fmt.Errorf("unable to get leaf proof: %w", err)
 		}
 
+		// Encode just the leaf proof, not the entire file.
+		var leafProofBuf bytes.Buffer
+		if err := leafProof.Encode(&leafProofBuf); err != nil {
+			return fmt.Errorf("unable to encode leaf proof: %w", err)
+		}
+		leafProofBytes := leafProofBuf.Bytes()
+
 		// With the proof extracted, we can now create the universe
 		// key and leaf.
 		universeKey := universe.BaseLeafKey{
@@ -1529,7 +1536,7 @@ func (b *BatchCaretaker) sendSupplyCommitEvents(ctx context.Context,
 				Genesis:  mintedAsset.Genesis,
 				GroupKey: mintedAsset.GroupKey,
 			},
-			RawProof: proofBlob,
+			RawProof: leafProofBytes,
 			Asset:    &leafProof.Asset,
 			Amt:      mintedAsset.Amount,
 		}
